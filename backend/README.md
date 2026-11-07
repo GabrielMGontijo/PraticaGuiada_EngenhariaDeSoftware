@@ -1,92 +1,76 @@
-# Academia — rotinas de treino personalizadas
+# Academia — Backend
 
-Implementação da User Story da Aula 09 (Arquitetura em Camadas e MVC).
+API para criação de rotinas de treino personalizadas, desenvolvida para a atividade da Aula 09 — Arquitetura em Camadas e MVC.
 
-## User Story
+## Funcionalidade implementada
 
 Como professor da academia, quero criar uma rotina de treinos personalizada selecionando itens de uma lista de exercícios para que cada aluno tenha um cronograma adaptado ao seu objetivo.
 
-### Critérios de aceitação
+A API permite:
 
-- Seleção obrigatória de aluno cadastrado, pelo menos uma divisão e pelo menos um exercício cadastrado por divisão.
-- Cada exercício exige séries positivas, repetições mínima e máxima positivas, carga inicial em kg não negativa e descanso em segundos não negativo.
-- A repetição mínima não pode ultrapassar a máxima; divisões não podem ter nomes repetidos, ignorando espaços nas extremidades e maiúsculas/minúsculas.
-- Salvar e Ativar arquiva a ficha anterior e ativa a nova na mesma transação.
-- Uma requisição inválida preserva a ficha ativa e o histórico.
-- O perfil consulta a ficha ativa atualizada imediatamente após a resposta de sucesso; fichas arquivadas continuam disponíveis no histórico.
+- Selecionar um aluno cadastrado e organizar a ficha em divisões, como Treino A, B e C.
+- Adicionar pelo menos um exercício do catálogo por divisão.
+- Definir séries, faixa de repetições, carga inicial recomendada em kg e descanso em segundos para cada exercício.
+- Salvar e ativar a nova ficha, arquivando a anterior no histórico.
+- Consultar a ficha ativa e o histórico de cada aluno.
 
-## Arquitetura
+O backend exige os campos obrigatórios, valida os valores e impede divisões com nomes repetidos. A repetição mínima não pode superar a máxima. Caso a criação falhe, a ficha anterior permanece ativa.
+
+## Arquitetura em camadas
 
 ```mermaid
 flowchart LR
-    Cliente[Cliente / formulário] --> Controller
-    Controller --> Service
-    Service --> Repository
-    Repository --> Banco[(H2)]
-    Service --> Model[Model / domínio]
+    Cliente[Cliente / Frontend] --> Controller[Controller\nRequisições e respostas HTTP]
+    Controller --> Service[Service\nRegras e casos de uso]
+    Service --> Repository[Repository\nAcesso aos dados]
+    Repository --> Banco[(Banco H2)]
 ```
 
-- `controller`: recebe JSON, aciona o serviço e traduz o resultado para HTTP. Não acessa repositórios.
-- `service`: valida regras, verifica referências e coordena a ativação e as consultas.
-- `repository`: persiste alunos, catálogo de exercícios e fichas via Spring Data JPA.
-- `model`: representa aluno, exercício e ficha; a ficha controla seu arquivamento.
-- `dto`: contratos de entrada e saída com validação de campos e listas aninhadas.
-- `exception`: converte erros de validação em HTTP 400 e recursos ausentes em HTTP 404.
+| Pacote | Responsabilidade |
+| --- | --- |
+| `controller` | Receber requisições, chamar os serviços e retornar respostas HTTP. |
+| `service` | Validar regras e coordenar criação, ativação e consulta das fichas. |
+| `repository` | Isolar o acesso ao banco com Spring Data JPA. |
+| `model` | Representar alunos, exercícios e fichas, incluindo o comportamento de arquivamento. |
+| `dto` | Definir os contratos de entrada e saída e a validação dos campos. |
+| `exception` | Centralizar o tratamento de erros e suas respostas HTTP. |
 
-A ativação usa `@Transactional` e bloqueio pessimista no aluno. Atualizações concorrentes do mesmo aluno são serializadas. O arquivamento e a criação são confirmados juntos; qualquer falha desfaz a operação. A prescrição é armazenada como um snapshot JSON na ficha, preservando divisões e parâmetros históricos. Essa escolha simplifica a entrega; relatórios por exercício podem justificar tabelas próprias para divisões e itens futuramente.
+### Decisão arquitetural
 
-Esta entrega é uma API REST de backend, sem View HTML. O frontend deve carregar as opções, enviar o formulário e, após o HTTP 201, atualizar o perfil usando o corpo retornado ou o endpoint da ficha ativa. Autenticação e autorização de professor/aluno não estão implementadas: os IDs identificam os dados, mas não constituem controle de acesso.
+A separação mantém as regras de negócio fora dos controllers e os detalhes de persistência nos repositórios. Isso facilita a manutenção e os testes, pois cada camada possui uma responsabilidade definida.
 
-## Executar
+O método `FichaService.salvarEAtivar` usa uma transação para arquivar a ficha anterior e salvar a nova como uma única operação. Um bloqueio pessimista no aluno serializa ativações simultâneas para o mesmo aluno. Após a confirmação, a nova ficha fica disponível no endpoint de consulta da ficha ativa.
 
-Requisitos: JDK 25 e Maven 3.9+. O POM inicial apontava para Java 26; foi ajustado para o JDK 25 disponível no ambiente.
+As divisões e os parâmetros dos exercícios são armazenados como um snapshot JSON na ficha, preservando a prescrição no histórico.
 
-```bash
-mvn test
-mvn spring-boot:run -Dspring-boot.run.profiles=demo
-```
-
-O perfil `demo` insere alunos e exercícios somente quando os respectivos catálogos estão vazios. Sem esse perfil, o banco começa vazio. O H2 persiste os dados em `data/academia`; os testes usam banco em memória separado.
+Como a entrega é uma API REST, a interface visual fica a cargo do frontend. O formulário deve consumir os catálogos e enviar os dados à API; após salvar, o perfil pode usar a resposta recebida ou consultar a ficha ativa. Autenticação e autorização ainda não estão implementadas.
 
 ## Endpoints
 
-| Método | Rota | Uso |
+| Método | Rota | Finalidade |
 | --- | --- | --- |
-| GET | `/alunos` | Opções de alunos |
-| GET | `/exercicios` | Catálogo de exercícios |
-| POST | `/fichas/salvar-e-ativar` | Criar e ativar ficha (201) |
-| GET | `/alunos/{id}/ficha-ativa` | Ficha atual do perfil (200, ou 404 se ausente) |
-| GET | `/alunos/{id}/historico-fichas` | Fichas arquivadas, mais recentes primeiro |
+| GET | `/alunos` | Listar alunos para seleção. |
+| GET | `/exercicios` | Listar exercícios disponíveis. |
+| POST | `/fichas/salvar-e-ativar` | Criar e ativar uma ficha. |
+| GET | `/alunos/{id}/ficha-ativa` | Consultar a ficha atual do aluno. |
+| GET | `/alunos/{id}/historico-fichas` | Consultar as fichas arquivadas. |
 
-Consulte `/alunos` e `/exercicios` para obter IDs válidos. Exemplo:
+## Executar a aplicação
+
+Requisitos: Java 25 e Maven.
 
 ```bash
-curl -X POST http://localhost:8080/fichas/salvar-e-ativar \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "alunoId": 1,
-    "divisoes": [
-      {
-        "nome": "Treino A",
-        "exercicios": [
-          {
-            "exercicioId": 1,
-            "series": 3,
-            "repeticoesMin": 8,
-            "repeticoesMax": 12,
-            "cargaInicialKg": 10.5,
-            "descansoSegundos": 60
-          }
-        ]
-      }
-    ]
-  }'
+mvn spring-boot:run -Dspring-boot.run.profiles=demo
 ```
 
-Repita a criação para o mesmo aluno e consulte a ficha ativa e o histórico. A primeira ficha deve estar arquivada, com `arquivadaEm` preenchido; a nova terá `ativa: true`.
+O perfil `demo` cria alunos e exercícios de exemplo quando os respectivos catálogos estão vazios. A API fica disponível em `http://localhost:8080`, e o H2 armazena os dados localmente em `data/academia`.
 
-## Validação
+## Executar os testes
 
-Os testes de integração cobrem substituição e histórico, preservação da ficha em caso de erro, campos e listas obrigatórios, valores inválidos, referências inexistentes, nomes duplicados, separação das consultas por aluno e contrato HTTP de criação/consulta/validação.
+Na pasta `backend`, execute:
 
-A descrição sugerida da PR está em [PR.md](PR.md). O repositório local não tem remoto configurado; a publicação da PR depende dessa configuração.
+```bash
+mvn test
+```
+
+Os testes de integração usam H2 em memória e verificam ativação, arquivamento, preservação da ficha em caso de erro, validações, referências inexistentes, consultas por aluno e respostas HTTP. Não é necessário iniciar a aplicação separadamente.
